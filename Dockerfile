@@ -7,16 +7,15 @@ ENV STOQ_ENV $STOQ_DIR/.stoq-pyenv
 ADD . ${STOQ_TMP}/stoq
 ADD ./stoq ${STOQ_DIR}
 
-RUN apt-get update \ 
-  && apt-get -y install software-properties-common \
-  && apt-add-repository -y multiverse
 
 #############################
 ### Install Prerequisites ###
 #############################
-RUN apt-get update \
-  && echo "[stoQ] Installing prerequisites..." \
-  && apt-get -y install \
+RUN apt-get -qy update
+RUN apt-get -qy install software-properties-common
+RUN apt-add-repository -y multiverse
+RUN apt-get -qy update
+RUN apt-get -qy install \
     autoconf \
     automake \
     build-essential \
@@ -39,22 +38,26 @@ RUN apt-get update \
     unace-nonfree \
     unzip \
     wget \
-  && echo "[stoQ] Setting up virtualenv..." \
-  && easy_install3 pip \
-  && pip3 install virtualenv --quiet \
-  && virtualenv ${STOQ_ENV}
+    bison \
+    flex \
+    libjansson-dev \
+    libtool \
+    libc6-i386 \
+    lib32ncurses5 \
+    rabbitmq-server \
+    vim \
+    supervisor \
+    clamav-daemon \
+    clamav-freshclam
+
+RUN easy_install3 pip
+RUN pip3 install virtualenv --quiet
 
 ####################
 ### Install Yara ###
 ####################
 WORKDIR ${STOQ_TMP}
-RUN echo "[stoQ] Installing yara..." \
-  && apt-get -yq install \
-    bison \
-    flex \
-    libjansson-dev \ 
-    libtool \
-  && git clone https://github.com/plusvic/yara.git yara \
+RUN git clone https://github.com/plusvic/yara.git yara \
   && git clone --recursive https://github.com/VirusTotal/yara-python
 
 WORKDIR ${STOQ_TMP}/yara
@@ -63,18 +66,19 @@ RUN bash bootstrap.sh \
   && make \
   && make install
 
-WORKDIR ${STOQ_TMP}/yara-python
-RUN echo "[stoQ] Installing yara-python..." \
-  && . ${STOQ_ENV}/bin/activate \
-  && python setup.py build --dynamic-linking \
-  && python setup.py install
+
+RUN virtualenv ${STOQ_ENV}
+RUN pip3 install yara-python
+#WORKDIR ${STOQ_TMP}/yara-python
+#RUN . ${STOQ_ENV}/bin/activate \
+    #  && python setup.py build --dynamic-linking \
+    #&& python setup.py install
 
 ####################
 ### Install Core ###
 ####################
 WORKDIR ${STOQ_TMP}/stoq
-RUN echo "[stoQ] Installing core stoQ components..." \
-  && . ${STOQ_ENV}/bin/activate \
+RUN . ${STOQ_ENV}/bin/activate \
   && python setup.py install \
   && pip install hydra
 
@@ -91,8 +95,7 @@ RUN . ${STOQ_ENV}/bin/activate \
 ### Install Xor ###
 ###################
 WORKDIR ${STOQ_TMP}
-RUN echo "[stoQ] Installing xorsearch..." \
-  && wget -O XORSearch.zip "https://didierstevens.com/files/software/XORSearch_V1_11_1.zip" \
+RUN wget -O XORSearch.zip "https://didierstevens.com/files/software/XORSearch_V1_11_1.zip" \
   && unzip -qq XORSearch -d XORSearch \
   && gcc -o /usr/local/bin/xorsearch XORSearch/XORSearch.c
 
@@ -100,8 +103,7 @@ RUN echo "[stoQ] Installing xorsearch..." \
 ### Install Exif ###
 ####################
 WORKDIR ${STOQ_TMP}
-RUN echo "[stoQ] Installing exiftool..." \
-  && wget -O exif.tgz "http://www.sno.phy.queensu.ca/~phil/exiftool/Image-ExifTool-10.38.tar.gz" \
+RUN wget -O exif.tgz "http://www.sno.phy.queensu.ca/~phil/exiftool/Image-ExifTool-10.38.tar.gz" \
   && tar -xvf exif.tgz
 
 WORKDIR ${STOQ_TMP}/Image-ExifTool-10.38
@@ -114,17 +116,41 @@ RUN perl Makefile.PL \
 ### Install Trid ###
 ####################
 WORKDIR ${STOQ_TMP}
-RUN echo "[stoQ] Installing trid" \
-  && apt-get -yq install libc6-i386 lib32ncurses5 \
-  && wget -O trid_linux_64.zip "http://mark0.net/download/trid_linux_64.zip" \
+RUN wget -O trid_linux_64.zip "http://mark0.net/download/trid_linux_64.zip" \
   && unzip -qq trid_linux_64 -d /usr/local/bin \
   && chmod +x /usr/local/bin/trid \
   && wget -O triddefs.zip "http://mark0.net/download/triddefs.zip" \
   && unzip -qq triddefs -d ${STOQ_DIR}/plugins/worker/trid
 
+
+####################
+### Install Floss ###
+####################
+WORKDIR ${STOQ_TMP}
+RUN cd $TMP_DIR \
+ &&     wget -O floss.zip https://github.com/fireeye/flare-floss/releases/download/v1.4.0/floss-1.4.0-GNU.Linux.zip \
+ &&     unzip floss.zip \
+ &&     mv floss $STOQ_DIR/plugins/worker/floss/ \
+ &&     chmod +x $STOQ_DIR/plugins/worker/floss/floss
+
+
+####################
+### Install RabbitMQ ###
+####################
+WORKDIR ${STOQ_TMP}
+RUN /usr/bin/freshclam --quiet
+#RUN /usr/sbin/clamd --foreground=false
+
 ###########################
 ### Cleanup and Staging ###
 ###########################
 WORKDIR ${STOQ_DIR}
+RUN mkdir ${STOQ_ENV}/malicious
+RUN mkdir /var/run/clamav/ && chown -R clamav:clamav /var/run/clamav/
 RUN rm -r ${STOQ_TMP}
 
+RUN echo source ${STOQ_ENV}/bin/activate >> $HOME/.bashrc
+ADD supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+ADD rabbit.sh /rabbit.sh
+RUN chmod 700 /rabbit.sh
+#RUN /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
